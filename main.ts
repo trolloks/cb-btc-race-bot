@@ -15,6 +15,9 @@ const STOP_BPS = 300n;
 const SLIPPAGE_BPS = 500;
 /** A stop sells in this many parts, one bar apart, to halve its impact. */
 const STOP_PARTS = 2;
+/** Wait for a 0.5% dip from the day's high before starting the entry, or start by bar 30. */
+const DIP_BPS = 50n;
+const START_BY_BAR = 30;
 /** Entry bars: the pool depth resets every bar, so 12 slices pay ~1/12 of the impact. */
 const SLICES = 12;
 /** The window is 1,440 bars; sell 11/12 over the last 12 bars and leave 1/12 for the close flatten. */
@@ -25,6 +28,8 @@ const EXIT_START = TOTAL_BARS - EXIT_BARS;
 let filledSlices = 0;
 let attempt = 0;
 let peak = 0n;
+let dayHigh = 0n;
+let started = false;
 let wantFlat = false;
 let stopPartsLeft = 0;
 
@@ -43,6 +48,13 @@ await runBars({
     if (symbol === undefined || state.warmingUp) return [];
     const close = state.close(symbol);
     if (close === null) return [];
+
+    if (close > dayHigh) dayHigh = close;
+    if (!started) {
+      if (close * BPS > dayHigh * (BPS - DIP_BPS) && state.seq < START_BY_BAR) return [];
+      started = true;
+      peak = close;
+    }
 
     if (close > peak) peak = close;
     const held = state.positions.get(symbol);
