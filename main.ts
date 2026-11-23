@@ -9,8 +9,8 @@
 
 import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
-/** 300 bps: sell after a 3% fall from the highest close since the buy. */
-const STOP_BPS = 300n;
+/** 350 bps: sell after a 3.5% fall from the highest close since the buy. */
+const STOP_BPS = 350n;
 /** Wide enough to fill on a gap, narrow enough to refuse a broken book. */
 const SLIPPAGE_BPS = 500;
 /** A stop sells in this many parts, one bar apart, to halve its impact. */
