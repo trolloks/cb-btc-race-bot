@@ -1,8 +1,10 @@
-// Long-only cbBTC bot. It buys at the first bar of the window and holds. If the close falls
-// STOP_BPS under the highest close seen since the buy, it sells and stays in cash until a close
-// makes a new high above that peak, then buys back in. A 3% trailing stop caps a crash at about
-// 6.5% with fees while keeping the full upside of a rising day, and it is far inside the 25%
-// drawdown guardrail. Integer arithmetic only, so two runs produce the same orders.
+// Long-only cbBTC bot. It buys in SLICES equal parts over the first SLICES bars and sells in
+// EXIT_BARS equal parts over the last EXIT_BARS bars: each bar's pool starts from its own open
+// depth, so equal slices pay about 1/SLICES of the price impact of one full-size order, while
+// the fee and slippage stay proportional. Between them it holds. If the close falls STOP_BPS
+// under the highest close seen since the buy, it sells and stays in cash until a close makes a
+// new high above that peak, then buys back in. Integer arithmetic only, so two runs produce
+// the same orders.
 
 import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
@@ -10,10 +12,17 @@ import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-ba
 const STOP_BPS = 300n;
 /** Wide enough to fill on a gap, narrow enough to refuse a broken book. */
 const SLIPPAGE_BPS = 500;
+/** Entry bars: the pool depth resets every bar, so 8 slices pay ~1/8 of the impact. */
+const SLICES = 8;
+/** The window is 1,440 bars; sell 7/8 over the last 8 bars and leave 1/8 for the close flatten. */
+const TOTAL_BARS = 1440;
+const EXIT_BARS = 8;
+const EXIT_START = TOTAL_BARS - EXIT_BARS;
 
-let everHeld = false;
+let filledSlices = 0;
+let attempt = 0;
 let peak = 0n;
-let stoppedOut = false;
+let wantFlat = false;
 
 function allIn(state: { cash: bigint; equity: bigint; hello: { caps: { max_weight_bps: number } } }): bigint {
   const byWeight = (BigInt(state.hello.caps.max_weight_bps) * state.equity) / BPS;
@@ -21,42 +30,64 @@ function allIn(state: { cash: bigint; equity: bigint; hello: { caps: { max_weigh
 }
 
 await runBars({
-  onBatch(state) {
+  onBatch(state, batch) {
+    for (const fill of batch.fills) {
+      if (fill.side === 'buy' && fill.status === 'filled' && fill.client_id.startsWith('slice-')) filledSlices++;
+    }
+
     const symbol = state.hello.symbols[0]?.symbol;
     if (symbol === undefined || state.warmingUp) return [];
     const close = state.close(symbol);
     if (close === null) return [];
 
-    const held = state.positions.get(symbol);
-    if (held !== undefined) {
-      everHeld = true;
-      stoppedOut = false;
-    }
-
-    // The first buy is retried until it fills, so a missing open or a rejected order cannot
-    // leave the bot in cash for the whole window.
-    if (!everHeld) {
-      peak = close;
-      const notional = allIn(state);
-      if (notional < BigInt(state.hello.fees.min_notional_quote_units)) return [];
-      return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS }];
-    }
-
     if (close > peak) peak = close;
+    const held = state.positions.get(symbol);
+    const min = BigInt(state.hello.fees.min_notional_quote_units);
 
-    if (held !== undefined) {
-      if (close * BPS <= peak * (BPS - STOP_BPS)) {
-        stoppedOut = true;
+    if (wantFlat) {
+      if (held !== undefined) {
         return [{ side: 'sell', symbol, qty: held.qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
       }
-      return [];
+      // Flat after a stop: wait for the price to clear the peak that stopped it out. The flag
+      // clears only once the buy fills, so a rejected re-entry is sent again on the next new high.
+      if (close <= peak) return [];
+      const notional = allIn(state);
+      if (notional < min) return [];
+      wantFlat = false;
+      filledSlices = SLICES;
+      return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS, client_id: `reentry-${attempt++}` } satisfies BuyInput];
     }
 
-    // Flat after a stop: wait for the price to clear the peak that stopped it out. The flag
-    // clears only once a buy fills, so a rejected re-entry is sent again on the next new high.
-    if (!stoppedOut || close <= peak) return [];
-    const notional = allIn(state);
-    if (notional < BigInt(state.hello.fees.min_notional_quote_units)) return [];
-    return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS } satisfies BuyInput];
+    if (held !== undefined && close * BPS <= peak * (BPS - STOP_BPS)) {
+      wantFlat = true;
+      return [{ side: 'sell', symbol, qty: held.qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
+    }
+
+    // Spread the exit the same way: sell an eighth of the position per bar over the last eight,
+    // leaving the last eighth for the replay's close-side flatten.
+    if (held !== undefined && state.seq >= EXIT_START && state.seq < TOTAL_BARS - 1) {
+      const qty = held.qty / BigInt(TOTAL_BARS - state.seq);
+      if (qty > 0n) {
+        return [{ side: 'sell', symbol, qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
+      }
+    }
+
+    if (filledSlices < SLICES) {
+      const remaining = BigInt(SLICES - filledSlices);
+      const notional = state.cash / remaining;
+      if (notional < min) {
+        filledSlices = SLICES;
+      } else {
+        return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS, client_id: `slice-${attempt++}` } satisfies BuyInput];
+      }
+    }
+
+    // A slice the market refused leaves cash behind; put it to work rather than hold it all day.
+    if (held === undefined) {
+      const notional = allIn(state);
+      if (notional < min) return [];
+      return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS, client_id: `fill-${attempt++}` } satisfies BuyInput];
+    }
+    return [];
   },
 });
