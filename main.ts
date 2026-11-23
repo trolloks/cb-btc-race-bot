@@ -1,5 +1,5 @@
-// Long-only cbBTC bot. It buys in SLICES equal parts over the first SLICES bars and sells in
-// EXIT_BARS equal parts over the last EXIT_BARS bars: each bar's pool starts from its own open
+// Long-only cbBTC bot. It waits for a washout bar (or 90 bars), buys in SLICES equal parts
+// over the next bars and sells in EXIT_BARS equal parts over the last EXIT_BARS bars: each pool
 // depth, so equal slices pay about 1/SLICES of the price impact of one full-size order, while
 // the fee and slippage stay proportional. Between them it holds. If the close falls STOP_BPS
 // under the highest close seen since the buy, it sells in STOP_PARTS parts over the next bars
@@ -15,9 +15,10 @@ const STOP_BPS = 300n;
 const SLIPPAGE_BPS = 500;
 /** A stop sells in this many parts, one bar apart, to halve its impact. */
 const STOP_PARTS = 2;
-/** Wait for a 0.5% dip from the day's high before starting the entry, or start by bar 30. */
+/** Wait for a washout (low 0.5% under the day high, close in the bottom 30% of the bar) or bar 90. */
 const DIP_BPS = 50n;
-const START_BY_BAR = 30;
+const START_BY_BAR = 90;
+const WASHOUT_CLOSE_PCT = 30n;
 /** Entry bars: the pool depth resets every bar, so 12 slices pay ~1/12 of the impact. */
 const SLICES = 12;
 /** The window is 1,440 bars; sell 11/12 over the last 12 bars and leave 1/12 for the close flatten. */
@@ -51,7 +52,13 @@ await runBars({
 
     if (close > dayHigh) dayHigh = close;
     if (!started) {
-      if (close * BPS > dayHigh * (BPS - DIP_BPS) && state.seq < START_BY_BAR) return [];
+      const bar = state.latest.get(symbol);
+      const low = bar === undefined ? close : BigInt(bar.l);
+      const high = bar === undefined ? close : BigInt(bar.h);
+      const range = high > low ? high - low : 0n;
+      const closePos = range > 0n ? ((close - low) * 100n) / range : 100n;
+      const washout = low * BPS <= dayHigh * (BPS - DIP_BPS) && closePos < WASHOUT_CLOSE_PCT;
+      if (!washout && state.seq < START_BY_BAR) return [];
       started = true;
       peak = close;
     }
