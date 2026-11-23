@@ -6,6 +6,10 @@
 
 A long-only cbBTC paper-trading bot that holds through the day and steps aside on a 6% fall from its peak, buying back only on a new high above that peak.
 
+## How it works
+
+The harness sends one `hello`, then one `batch` per minute `bar` with the latest price and fills. The bot answers each batch with at most one order: it buys with all its cash on the first bar, tracks the highest close, and sells when the close is 6% under that peak. It stays in cash until a close clears the old peak, then buys back in. Integer arithmetic only, so two runs reply with the same orders.
+
 ## Run it
 
 ```sh
