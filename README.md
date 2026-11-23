@@ -8,7 +8,7 @@ A long-only cbBTC paper-trading bot that waits for a washout bar (or 90 minutes)
 
 ## How it works
 
-The harness sends one `hello`, then one `batch` per minute `bar` with the latest price and fills. The bot answers each batch with at most one order: it waits for a bar whose low is 0.5% under the day's high and whose close is in the bottom 30% of its range, or 90 minutes, then buys a twelfth of its cash per bar over the next twelve bars, holds, and sells an eighth per bar over the last eight. Each bar's pool starts from its own open depth, so the entry slices pay about an eighth of the price impact of one full-size order. It tracks the highest close and sells in two parts when the close is 3.5% under that peak; it stays in cash until a close clears the old peak, then buys back in. Integer arithmetic only, so two runs reply with the same orders.
+The harness sends one `hello`, then one `batch` per minute `bar` with the latest price and fills. The bot answers each batch with at most one order: it waits for a bar whose low is 0.5% under the day's high and whose close is in the bottom 30% of its range, or 90 minutes, then buys a twelfth of its cash per bar over the next twelve bars, holds, and sells an eighth per bar over the last eight. Each bar's pool starts from its own open depth, so the entry slices pay about an eighth of the price impact of one full-size order. It tracks the highest close and sells in two parts when the close is 3.5% under that peak; it stays in cash until a close clears the old peak, then buys back in. Once the position is 5% over its cost (fees included) it sells the same two-part way and stays in cash for the rest of the day. Integer arithmetic only, so two runs reply with the same orders.
 
 ## Run it
 
