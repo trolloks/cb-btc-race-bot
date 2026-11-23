@@ -21,9 +21,9 @@ const START_BY_BAR = 90;
 const WASHOUT_CLOSE_PCT = 30n;
 /** Entry bars: the pool depth resets every bar, so 12 slices pay ~1/12 of the impact. */
 const SLICES = 12;
-/** The window is 1,440 bars; sell 11/12 over the last 12 bars and leave 1/12 for the close flatten. */
+/** The window is 1,440 bars; sell 7/8 over the last 8 bars and leave 1/8 for the close flatten. */
 const TOTAL_BARS = 1440;
-const EXIT_BARS = 12;
+const EXIT_BARS = 8;
 const EXIT_START = TOTAL_BARS - EXIT_BARS;
 
 let filledSlices = 0;
@@ -100,8 +100,8 @@ await runBars({
       return [{ side: 'sell', symbol, qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
     }
 
-    // Spread the exit the same way: sell a twelfth of the position per bar over the last twelve,
-    // leaving the last twelfth for the replay's close-side flatten.
+    // Spread the exit the same way: sell an eighth of the position per bar over the last eight,
+    // leaving the last eighth for the replay's close-side flatten.
     if (held !== undefined && state.seq >= EXIT_START && state.seq < TOTAL_BARS - 1) {
       const qty = held.qty / BigInt(TOTAL_BARS - state.seq);
       if (qty > 0n) {
