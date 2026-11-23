@@ -4,7 +4,8 @@
 // the fee and slippage stay proportional. Between them it holds. If the close falls STOP_BPS
 // under the highest close seen since the buy, it sells in STOP_PARTS parts over the next bars
 // (the pool resets, so two halves cost half the impact of one sale) and stays in cash until a
-// close makes a new high above that peak, then buys back in. Integer arithmetic only, so two
+// close makes a new high above that peak, then buys back in. Once the position is TAKE_PROFIT_BPS
+// over its cost it sells the same two-part way and stays in cash for the rest of the window. Integer arithmetic only, so two
 // runs produce the same orders.
 
 import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
@@ -15,6 +16,8 @@ const STOP_BPS = 350n;
 const SLIPPAGE_BPS = 500;
 /** A stop sells in this many parts, one bar apart, to halve its impact. */
 const STOP_PARTS = 2;
+/** 500 bps: bank the day once the position is 5% over its cost (fees included); stay out after. */
+const TAKE_PROFIT_BPS = 500n;
 /** Wait for a washout (low 0.5% under the day high, close in the bottom 30% of the bar) or bar 90. */
 const DIP_BPS = 50n;
 const START_BY_BAR = 90;
@@ -33,6 +36,7 @@ let dayHigh = 0n;
 let started = false;
 let wantFlat = false;
 let stopPartsLeft = 0;
+let banked = false;
 
 function allIn(state: { cash: bigint; equity: bigint; hello: { caps: { max_weight_bps: number } } }): bigint {
   const byWeight = (BigInt(state.hello.caps.max_weight_bps) * state.equity) / BPS;
@@ -71,6 +75,7 @@ await runBars({
       if (held !== undefined) {
         return [{ side: 'sell', symbol, qty: held.qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
       }
+      if (banked) return [];
       // Flat after a stop: wait for the price to clear the peak that stopped it out. The flag
       // clears only once the buy fills, so a rejected re-entry is sent again on the next new high.
       if (close <= peak) return [];
@@ -92,7 +97,9 @@ await runBars({
       wantFlat = true;
     }
 
-    if (held !== undefined && close * BPS <= peak * (BPS - STOP_BPS)) {
+    const takeProfit = held !== undefined && filledSlices >= SLICES && state.value(symbol, held.qty) * BPS >= held.cost * (BPS + TAKE_PROFIT_BPS);
+    if (takeProfit) banked = true;
+    if (held !== undefined && (takeProfit || close * BPS <= peak * (BPS - STOP_BPS))) {
       stopPartsLeft = STOP_PARTS;
       const qty = held.qty / BigInt(STOP_PARTS);
       stopPartsLeft--;
