@@ -28,7 +28,10 @@ await runBars({
     if (close === null) return [];
 
     const held = state.positions.get(symbol);
-    if (held !== undefined) everHeld = true;
+    if (held !== undefined) {
+      everHeld = true;
+      stoppedOut = false;
+    }
 
     // The first buy is retried until it fills, so a missing open or a rejected order cannot
     // leave the bot in cash for the whole window.
@@ -49,11 +52,11 @@ await runBars({
       return [];
     }
 
-    // Flat after a stop: wait for the price to clear the peak that stopped it out.
+    // Flat after a stop: wait for the price to clear the peak that stopped it out. The flag
+    // clears only once a buy fills, so a rejected re-entry is sent again on the next new high.
     if (!stoppedOut || close <= peak) return [];
     const notional = allIn(state);
     if (notional < BigInt(state.hello.fees.min_notional_quote_units)) return [];
-    stoppedOut = false;
     return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS } satisfies BuyInput];
   },
 });
