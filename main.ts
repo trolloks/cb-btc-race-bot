@@ -1,17 +1,17 @@
 // Long-only cbBTC bot. It buys at the first bar of the window and holds. If the close falls
 // STOP_BPS under the highest close seen since the buy, it sells and stays in cash until a close
-// makes a new high above that peak, then buys back in. A 6% trailing stop caps a crash at about
+// makes a new high above that peak, then buys back in. A 3% trailing stop caps a crash at about
 // 6.5% with fees while keeping the full upside of a rising day, and it is far inside the 25%
 // drawdown guardrail. Integer arithmetic only, so two runs produce the same orders.
 
 import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
-/** 600 bps: sell after a 6% fall from the highest close since the buy. */
-const STOP_BPS = 600n;
+/** 300 bps: sell after a 3% fall from the highest close since the buy. */
+const STOP_BPS = 300n;
 /** Wide enough to fill on a gap, narrow enough to refuse a broken book. */
 const SLIPPAGE_BPS = 500;
 
-let started = false;
+let everHeld = false;
 let peak = 0n;
 let stoppedOut = false;
 
@@ -27,8 +27,12 @@ await runBars({
     const close = state.close(symbol);
     if (close === null) return [];
 
-    if (!started) {
-      started = true;
+    const held = state.positions.get(symbol);
+    if (held !== undefined) everHeld = true;
+
+    // The first buy is retried until it fills, so a missing open or a rejected order cannot
+    // leave the bot in cash for the whole window.
+    if (!everHeld) {
       peak = close;
       const notional = allIn(state);
       if (notional < BigInt(state.hello.fees.min_notional_quote_units)) return [];
@@ -37,7 +41,6 @@ await runBars({
 
     if (close > peak) peak = close;
 
-    const held = state.positions.get(symbol);
     if (held !== undefined) {
       if (close * BPS <= peak * (BPS - STOP_BPS)) {
         stoppedOut = true;
