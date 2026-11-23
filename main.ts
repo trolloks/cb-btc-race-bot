@@ -2,9 +2,10 @@
 // EXIT_BARS equal parts over the last EXIT_BARS bars: each bar's pool starts from its own open
 // depth, so equal slices pay about 1/SLICES of the price impact of one full-size order, while
 // the fee and slippage stay proportional. Between them it holds. If the close falls STOP_BPS
-// under the highest close seen since the buy, it sells and stays in cash until a close makes a
-// new high above that peak, then buys back in. Integer arithmetic only, so two runs produce
-// the same orders.
+// under the highest close seen since the buy, it sells in STOP_PARTS parts over the next bars
+// (the pool resets, so two halves cost half the impact of one sale) and stays in cash until a
+// close makes a new high above that peak, then buys back in. Integer arithmetic only, so two
+// runs produce the same orders.
 
 import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-bars.ts';
 
@@ -12,6 +13,8 @@ import { BPS, runBars, type BuyInput, type SellInput } from './vendor/makefun-ba
 const STOP_BPS = 300n;
 /** Wide enough to fill on a gap, narrow enough to refuse a broken book. */
 const SLIPPAGE_BPS = 500;
+/** A stop sells in this many parts, one bar apart, to halve its impact. */
+const STOP_PARTS = 2;
 /** Entry bars: the pool depth resets every bar, so 12 slices pay ~1/12 of the impact. */
 const SLICES = 12;
 /** The window is 1,440 bars; sell 11/12 over the last 12 bars and leave 1/12 for the close flatten. */
@@ -23,6 +26,7 @@ let filledSlices = 0;
 let attempt = 0;
 let peak = 0n;
 let wantFlat = false;
+let stopPartsLeft = 0;
 
 function allIn(state: { cash: bigint; equity: bigint; hello: { caps: { max_weight_bps: number } } }): bigint {
   const byWeight = (BigInt(state.hello.caps.max_weight_bps) * state.equity) / BPS;
@@ -54,16 +58,30 @@ await runBars({
       const notional = allIn(state);
       if (notional < min) return [];
       wantFlat = false;
+      stopPartsLeft = 0;
       filledSlices = SLICES;
       return [{ side: 'buy', symbol, notional_quote_units: notional, max_slippage_bps: SLIPPAGE_BPS, client_id: `reentry-${attempt++}` } satisfies BuyInput];
     }
 
-    if (held !== undefined && close * BPS <= peak * (BPS - STOP_BPS)) {
+    if (stopPartsLeft > 0 && held !== undefined) {
+      const qty = held.qty / BigInt(stopPartsLeft);
+      stopPartsLeft--;
+      if (stopPartsLeft === 0) wantFlat = true;
+      if (qty > 0n) {
+        return [{ side: 'sell', symbol, qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
+      }
       wantFlat = true;
-      return [{ side: 'sell', symbol, qty: held.qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
     }
 
-    // Spread the exit the same way: sell an twelfth of the position per bar over the last twelve,
+    if (held !== undefined && close * BPS <= peak * (BPS - STOP_BPS)) {
+      stopPartsLeft = STOP_PARTS;
+      const qty = held.qty / BigInt(STOP_PARTS);
+      stopPartsLeft--;
+      if (stopPartsLeft === 0) wantFlat = true;
+      return [{ side: 'sell', symbol, qty, max_slippage_bps: SLIPPAGE_BPS } satisfies SellInput];
+    }
+
+    // Spread the exit the same way: sell a twelfth of the position per bar over the last twelve,
     // leaving the last twelfth for the replay's close-side flatten.
     if (held !== undefined && state.seq >= EXIT_START && state.seq < TOTAL_BARS - 1) {
       const qty = held.qty / BigInt(TOTAL_BARS - state.seq);
